@@ -4,6 +4,8 @@ from gemini_parser import extract_meeting_details
 from calendar_auth import authenticate_google_calendar, create_event
 import datetime
 import time
+import os
+import json
 
 app = Flask(__name__)
 
