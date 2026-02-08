@@ -4,28 +4,20 @@ import time
 import re
 import requests
 
-API_KEY = os.environ.get("GEMINI_API_KEY")
-
+API_KEY = os.getenv("GEMINI_API_KEY")
 if not API_KEY:
-    raise RuntimeError("❌ GEMINI_API_KEY not set in environment variables")
+    raise RuntimeError("❌ GEMINI_API_KEY not set")
 
-GEMINI_URL = (
+URL = (
     "https://generativelanguage.googleapis.com/v1beta/"
     f"models/gemini-1.5-flash:generateContent?key={API_KEY}"
 )
 
-def extract_meeting_details(message: str) -> dict:
-    """
-    Uses Gemini to extract meeting intent, person, date, and time
-    """
-
+def extract_meeting_details(message: str):
     prompt = f"""
-You are an information extraction engine.
+Extract meeting info and return ONLY JSON.
 
-Extract meeting information from the WhatsApp message below.
-
-Return ONLY valid JSON in this exact format:
-
+Format:
 {{
   "intent": "schedule_meeting" | "none",
   "person_name": string | null,
@@ -33,62 +25,40 @@ Return ONLY valid JSON in this exact format:
   "time": "HH:MM" | null
 }}
 
-Rules:
-- Convert relative dates like "tomorrow" correctly
-- Convert time to 24-hour format
-- If unclear, return null for that field
-- Do NOT add explanations or text outside JSON
-
 Message:
-\"{message}\"
+"{message}"
 """
 
     payload = {
-        "contents": [
-            {
-                "parts": [{"text": prompt}]
-            }
-        ]
+        "contents": [{"parts": [{"text": prompt}]}]
     }
 
     for attempt in range(3):
-        response = requests.post(GEMINI_URL, json=payload, timeout=30)
+        try:
+            response = requests.post(
+                URL,
+                json=payload,
+                headers={"Content-Type": "application/json"},
+                timeout=20
+            )
 
-        if response.status_code == 429:
-            time.sleep(2 ** attempt)
-            continue
+            if response.status_code == 429:
+                time.sleep(2 ** attempt)
+                continue
 
-        response.raise_for_status()
+            response.raise_for_status()
 
-        data = response.json()
-        raw_text = data["candidates"][0]["content"]["parts"][0]["text"]
+            text = response.json()["candidates"][0]["content"]["parts"][0]["text"]
+            match = re.search(r"\{.*\}", text, re.DOTALL)
 
-        print("🧠 Gemini raw response:\n", raw_text)
+            if match:
+                return json.loads(match.group())
 
-        # Extract JSON safely
-        match = re.search(r"\{.*\}", raw_text, re.DOTALL)
-        if not match:
-            return {
-                "intent": "none",
-                "person_name": None,
-                "date": None,
-                "time": None
-            }
+            return {"intent": "none", "person_name": None, "date": None, "time": None}
 
-        return json.loads(match.group(0))
+        except Exception as e:
+            print(f"⚠️ Gemini attempt {attempt+1} failed:", e)
+            time.sleep(2)
 
-    raise RuntimeError("❌ Gemini API failed after retries")
-
-
-# 🔍 LOCAL TEST
-if __name__ == "__main__":
-    test_messages = [
-        "hi",
-        "meet mr rahul on 9th march 2025 at 9 am",
-        "I want to meet Mr Deepak",
-        "schedule a meeting tomorrow at 4 pm"
-    ]
-
-    for msg in test_messages:
-        print("\n📩 Message:", msg)
-        print("📊 Parsed:", extract_meeting_details(msg))
+    # NEVER crash WhatsApp webhook
+    return {"intent": "none", "person_name": None, "date": None, "time": None}
