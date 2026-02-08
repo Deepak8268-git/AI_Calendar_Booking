@@ -1,6 +1,7 @@
 from flask import Flask, request
 from twilio.twiml.messaging_response import MessagingResponse
 import datetime
+import os , json
 
 from gemini_parser import extract_meeting_details
 from calendar_auth import authenticate_google_calendar, create_event
