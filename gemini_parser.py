@@ -11,7 +11,7 @@ if not API_KEY:
 
 GEMINI_URL = (
     "https://generativelanguage.googleapis.com/v1beta/"
-    f"models/gemini-flash-latest:generateContent?key={API_KEY}"
+    f"models/gemini-1.5-flash:generateContent?key={API_KEY}"
 )
 
 def extract_meeting_details(message: str) -> dict:
