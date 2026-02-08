@@ -1,5 +1,6 @@
 import requests
 import json
+import os
 
 # API_KEY = "AIzaSyCfMOLzU9FAa0oH0p0UTAFPhdIUeiBrPZ4"  # your real key
 API_KEY = os.getenv("GEMINI_API_KEY")
