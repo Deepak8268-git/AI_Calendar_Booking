@@ -1,90 +1,110 @@
-import os
-from flask import Flask, request, Response
+from flask import Flask, request
 from twilio.twiml.messaging_response import MessagingResponse
-from collections import defaultdict
+import datetime
 
 from gemini_parser import extract_meeting_details
+from calendar_auth import authenticate_google_calendar, create_event
 
-# --------------------------------
-# CREATE FLASK APP (THIS WAS MISSING)
-# --------------------------------
 app = Flask(__name__)
 
-# Store user session data (in-memory)
-user_sessions = defaultdict(dict)
+# 🔹 In-memory session storage (per WhatsApp number)
+sessions = {}
 
-# --------------------------------
-# WHATSAPP WEBHOOK
-# --------------------------------
+
 @app.route("/whatsapp", methods=["POST"])
 def whatsapp_reply():
-    from_number = request.form.get("From")
-    incoming_msg = request.form.get("Body", "").strip().lower()
+    incoming_msg = request.form.get("Body", "").strip()
+    sender = request.form.get("From")
+
+    print(f"📩 Message from {sender}: {incoming_msg}")
 
     resp = MessagingResponse()
-    session = user_sessions[from_number]
 
-    # -------------------------------
-    # CONFIRMATION HANDLING
-    # -------------------------------
-    if incoming_msg in ["yes", "y"] and session.get("awaiting_confirmation"):
-        resp.message("✅ Your meeting has been confirmed.")
-        user_sessions[from_number] = {}
-        return Response(str(resp), mimetype="application/xml")
+    msg_lower = incoming_msg.lower()
 
-    if incoming_msg in ["no", "n"] and session.get("awaiting_confirmation"):
-        resp.message("❌ Meeting cancelled.")
-        user_sessions[from_number] = {}
-        return Response(str(resp), mimetype="application/xml")
+    # --------------------------------------------------
+    # 1️⃣ HANDLE YES / NO CONFIRMATION
+    # --------------------------------------------------
+    if sender in sessions and sessions[sender]["awaiting_confirmation"]:
 
-    # -------------------------------
-    # EXTRACT MEETING DETAILS
-    # -------------------------------
+        if msg_lower in ["yes", "y"]:
+            session = sessions[sender]
+
+            service = authenticate_google_calendar()
+
+            start_time = f"{session['date']}T{session['time']}:00"
+            start_dt = datetime.datetime.fromisoformat(start_time)
+            end_dt = start_dt + datetime.timedelta(hours=1)
+
+            event_data = {
+                "summary": f"Meeting with {session['person_name']}",
+                "description": "Scheduled via WhatsApp AI Assistant",
+                "start_time": start_dt.isoformat(),
+                "end_time": end_dt.isoformat(),
+                "timezone": "Asia/Kolkata"
+            }
+
+            create_event(service, event_data)
+
+            resp.message(
+                f"✅ Your meeting with {session['person_name']} "
+                f"on {session['date']} at {session['time']} "
+                f"has been added to Google Calendar."
+            )
+
+            del sessions[sender]
+            return str(resp)
+
+        elif msg_lower in ["no", "n", "cancel"]:
+            resp.message("❌ Meeting cancelled. No event was created.")
+            del sessions[sender]
+            return str(resp)
+
+        else:
+            resp.message("Please reply YES to confirm or NO to cancel.")
+            return str(resp)
+
+    # --------------------------------------------------
+    # 2️⃣ NEW MESSAGE → USE GEMINI
+    # --------------------------------------------------
     details = extract_meeting_details(incoming_msg)
+    print("🧠 Extracted:", details)
 
     if details["intent"] != "schedule_meeting":
-        resp.message("❓ I can help you schedule a meeting.")
-        return Response(str(resp), mimetype="application/xml")
+        resp.message(
+            "👋 Hi! You can say:\n"
+            "“Meet Mr Rahul on 7th Feb at 4 PM”"
+        )
+        return str(resp)
 
-    # Save extracted data
-    for key in ["person_name", "date", "time"]:
-        if details.get(key):
-            session[key] = details[key]
+    # If date or time missing → ask follow-up
+    if not details["date"] or not details["time"]:
+        resp.message(
+            "⏰ I need both date and time.\n"
+            "Example: “Tomorrow at 4 PM”"
+        )
+        return str(resp)
 
-    # -------------------------------
-    # ASK FOR MISSING INFO
-    # -------------------------------
-    if not session.get("person_name"):
-        resp.message("👤 With whom is the meeting?")
-        return Response(str(resp), mimetype="application/xml")
-
-    if not session.get("date"):
-        resp.message("📅 On which date should I schedule the meeting?")
-        return Response(str(resp), mimetype="application/xml")
-
-    if not session.get("time"):
-        resp.message("⏰ At what time should I schedule the meeting?")
-        return Response(str(resp), mimetype="application/xml")
-
-    # -------------------------------
-    # CONFIRMATION STEP
-    # -------------------------------
-    session["awaiting_confirmation"] = True
+    # --------------------------------------------------
+    # 3️⃣ STORE & ASK FOR CONFIRMATION
+    # --------------------------------------------------
+    sessions[sender] = {
+        "awaiting_confirmation": True,
+        "person_name": details["person_name"] or "Unknown",
+        "date": details["date"],
+        "time": details["time"]
+    }
 
     resp.message(
-        f"📅 Meeting Details:\n"
-        f"👤 {session['person_name']}\n"
-        f"📆 {session['date']}\n"
-        f"⏰ {session['time']}\n\n"
+        f"📅 Please confirm your meeting:\n\n"
+        f"👤 Person: {details['person_name']}\n"
+        f"📆 Date: {details['date']}\n"
+        f"⏰ Time: {details['time']}\n\n"
         f"Reply YES to confirm or NO to cancel."
     )
 
-    return Response(str(resp), mimetype="application/xml")
+    return str(resp)
 
 
-# --------------------------------
-# RUN APP (RENDER NEEDS THIS)
-# --------------------------------
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(port=10000)

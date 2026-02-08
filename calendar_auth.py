@@ -1,51 +1,69 @@
-from google_auth_oauthlib.flow import InstalledAppFlow
-from googleapiclient.discovery import build
-import os , json
+import os
+import json
+from datetime import datetime, timedelta
 
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+
+# Google Calendar scope
 SCOPES = ["https://www.googleapis.com/auth/calendar"]
 
+
 def authenticate_google_calendar():
-    creds = None
+    """
+    Authenticate Google Calendar using Service Account (Render-safe)
+    """
 
-    if os.path.exists("token.json"):
-        from google.oauth2.credentials import Credentials
-        creds = Credentials.from_authorized_user_file("token.json", SCOPES)
+    if "GOOGLE_SERVICE_ACCOUNT_JSON" not in os.environ:
+        raise RuntimeError("❌ GOOGLE_SERVICE_ACCOUNT_JSON env variable not set")
 
-    if not creds or not creds.valid:
-        creds_dict = json.loads(os.environ["GOOGLE_CREDENTIALS"])
-        flow = InstalledAppFlow.from_client_config(creds_dict, SCOPES)
-        creds = flow.run_local_server(port=0)   
+    service_account_info = json.loads(
+        os.environ["GOOGLE_SERVICE_ACCOUNT_JSON"]
+    )
 
-        with open("token.json", "w") as token:
-            token.write(creds.to_json())
+    credentials = service_account.Credentials.from_service_account_info(
+        service_account_info,
+        scopes=SCOPES
+    )
 
-    service = build("calendar", "v3", credentials=creds)
+    service = build("calendar", "v3", credentials=credentials)
     return service
 
 
-def create_event(service, event_data):
+def create_event(
+    service,
+    person_name: str,
+    date: str,
+    time: str,
+    duration_minutes: int = 60,
+):
     """
-    Creates an event in the primary calendar using the provided data.
-    event_data should contain: summary, description, start_time, end_time, timezone
+    Creates Google Calendar event
+
+    date: YYYY-MM-DD
+    time: HH:MM (24-hour)
     """
+
+    start_dt = datetime.fromisoformat(f"{date}T{time}")
+    end_dt = start_dt + timedelta(minutes=duration_minutes)
+
     event = {
-        "summary": event_data.get("summary", "AI Scheduled Meeting"),
-        "description": event_data.get("description", "Created via AI_Calendar_Booking"),
+        "summary": f"Meeting with {person_name}",
+        "description": "Scheduled via WhatsApp AI Calendar Bot",
         "start": {
-            "dateTime": event_data["start_time"],
-            "timeZone": event_data.get("timezone", "Asia/Kolkata"),
+            "dateTime": start_dt.isoformat(),
+            "timeZone": "Asia/Kolkata",
         },
         "end": {
-            "dateTime": event_data["end_time"],
-            "timeZone": event_data.get("timezone", "Asia/Kolkata"),
+            "dateTime": end_dt.isoformat(),
+            "timeZone": "Asia/Kolkata",
         },
     }
 
-    event_result = service.events().insert(calendarId="primary", body=event).execute()
-    print(f"📅 Event created: {event_result.get('htmlLink')}")
-    return event_result
+    created_event = service.events().insert(
+        calendarId="primary",
+        body=event
+    ).execute()
 
-
-if __name__ == "__main__":
-    service = authenticate_google_calendar()
-    # create_event(service, {...})
+    print("📅 Event created:", created_event.get("htmlLink"))
+    return created_event.get("htmlLink")
