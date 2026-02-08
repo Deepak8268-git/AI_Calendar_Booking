@@ -5,67 +5,83 @@ import os
 
 app = Flask(__name__)
 
-# 🔒 In-memory session store
+# 🔒 In-memory store (one user → one pending meeting)
 pending_meetings = {}
+
 
 @app.route("/whatsapp", methods=["POST"])
 def whatsapp_reply():
     incoming_msg = request.form.get("Body", "").strip()
     from_number = request.form.get("From")
-
     msg_lower = incoming_msg.lower()
 
-    # =======================
-    # STEP 2: CONFIRMATION
-    # =======================
+    # ==================================================
+    # STEP 2️⃣ : HANDLE CONFIRMATION (YES / NO)
+    # ==================================================
     if from_number in pending_meetings:
+
         if msg_lower == "yes":
-            data = pending_meetings.pop(from_number)
+            meeting = pending_meetings.pop(from_number)
 
-            service = authenticate_google_calendar()
-            create_event(
-                service,
-                person_name=data["person_name"] or "Meeting",
-                date=data["date"],
-                time=data["time"]
-            )
+            try:
+                service = authenticate_google_calendar()
+                create_event(
+                    service,
+                    person_name=meeting["person_name"] or "Meeting",
+                    date=meeting["date"],
+                    time=meeting["time"]
+                )
 
-            return twiml("✅ Your meeting has been scheduled in Google Calendar.")
+                return twiml(
+                    "✅ Your meeting has been confirmed and saved to Google Calendar."
+                )
+
+            except Exception as e:
+                return twiml(
+                    "❌ Failed to save meeting to Google Calendar. Please try again later."
+                )
 
         if msg_lower == "no":
             pending_meetings.pop(from_number)
-            return twiml("❌ Meeting cancelled.")
+            return twiml("❌ Meeting cancelled successfully.")
 
-        # Waiting for YES/NO
+        # User sent something else while confirmation pending
         return twiml("⚠️ Please reply YES to confirm or NO to cancel.")
 
-    # =======================
-    # STEP 1: NEW MESSAGE
-    # =======================
+    # ==================================================
+    # STEP 1️⃣ : NEW MESSAGE → GEMINI PARSING
+    # ==================================================
     details = extract_meeting_details(incoming_msg)
 
+    # No meeting intent
     if details["intent"] != "schedule_meeting":
         return twiml(
             "👋 Hi! You can say:\n"
             "“Meet Mr Rahul on 7th Feb at 4 PM”"
         )
 
+    # Missing date or time
     if not details["date"] or not details["time"]:
-        return twiml("📅 Please provide both date and time.")
+        return twiml("📅 Please provide both date and time for the meeting.")
 
-    # Save meeting for confirmation
+    # ==================================================
+    # STEP 3️⃣ : ASK FOR CONFIRMATION
+    # ==================================================
     pending_meetings[from_number] = details
 
     return twiml(
-        f"📅 *Meeting Details*\n"
-        f"👤 {details['person_name']}\n"
+        f"📅 Meeting Details\n"
+        f"👤 {details['person_name'] or 'Guest'}\n"
         f"📆 {details['date']}\n"
         f"⏰ {details['time']}\n\n"
-        f"Reply *YES* to confirm or *NO* to cancel."
+        f"Reply YES to confirm or NO to cancel."
     )
 
 
-def twiml(message):
+# ==================================================
+# TWILIO XML RESPONSE
+# ==================================================
+def twiml(message: str):
     return Response(
         f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
@@ -75,6 +91,9 @@ def twiml(message):
     )
 
 
+# ==================================================
+# RENDER ENTRY POINT
+# ==================================================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
