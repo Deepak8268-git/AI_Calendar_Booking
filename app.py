@@ -1,40 +1,47 @@
 from flask import Flask, request, Response
 from gemini_parser import extract_meeting_details
 from calendar_auth import authenticate_google_calendar, create_event
-import os, json
+import os
 
 app = Flask(__name__)
 
-# 🧠 Temporary in-memory store (per phone number)
+# 🔒 In-memory session store
 pending_meetings = {}
 
 @app.route("/whatsapp", methods=["POST"])
 def whatsapp_reply():
     incoming_msg = request.form.get("Body", "").strip()
-    from_number = request.form.get("From")  # whatsapp:+91xxxx
+    from_number = request.form.get("From")
 
-    incoming_lower = incoming_msg.lower()
+    msg_lower = incoming_msg.lower()
 
-    # ---------- STEP 2: Confirmation ----------
+    # =======================
+    # STEP 2: CONFIRMATION
+    # =======================
     if from_number in pending_meetings:
-        if incoming_lower == "yes":
+        if msg_lower == "yes":
             data = pending_meetings.pop(from_number)
 
             service = authenticate_google_calendar()
             create_event(
                 service,
-                person_name=data["person_name"] or "Unknown",
+                person_name=data["person_name"] or "Meeting",
                 date=data["date"],
                 time=data["time"]
             )
 
-            return twiml("✅ Your meeting has been confirmed and saved to Google Calendar.")
+            return twiml("✅ Your meeting has been scheduled in Google Calendar.")
 
-        elif incoming_lower == "no":
+        if msg_lower == "no":
             pending_meetings.pop(from_number)
             return twiml("❌ Meeting cancelled.")
 
-    # ---------- STEP 1: Parse new message ----------
+        # Waiting for YES/NO
+        return twiml("⚠️ Please reply YES to confirm or NO to cancel.")
+
+    # =======================
+    # STEP 1: NEW MESSAGE
+    # =======================
     details = extract_meeting_details(incoming_msg)
 
     if details["intent"] != "schedule_meeting":
@@ -43,22 +50,19 @@ def whatsapp_reply():
             "“Meet Mr Rahul on 7th Feb at 4 PM”"
         )
 
-    # Missing date/time → ask follow-up
     if not details["date"] or not details["time"]:
-        return twiml("📅 Please tell me the date and time for the meeting.")
+        return twiml("📅 Please provide both date and time.")
 
-    # Save pending meeting
+    # Save meeting for confirmation
     pending_meetings[from_number] = details
 
-    reply = (
-        f"📅 *Meeting Details:*\n"
+    return twiml(
+        f"📅 *Meeting Details*\n"
         f"👤 {details['person_name']}\n"
         f"📆 {details['date']}\n"
         f"⏰ {details['time']}\n\n"
         f"Reply *YES* to confirm or *NO* to cancel."
     )
-
-    return twiml(reply)
 
 
 def twiml(message):
