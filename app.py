@@ -1,21 +1,33 @@
-from flask import request, Response
+import os
+from flask import Flask, request, Response
 from twilio.twiml.messaging_response import MessagingResponse
+from collections import defaultdict
+
 from gemini_parser import extract_meeting_details
 
+# --------------------------------
+# CREATE FLASK APP (THIS WAS MISSING)
+# --------------------------------
+app = Flask(__name__)
+
+# Store user session data (in-memory)
+user_sessions = defaultdict(dict)
+
+# --------------------------------
+# WHATSAPP WEBHOOK
+# --------------------------------
 @app.route("/whatsapp", methods=["POST"])
 def whatsapp_reply():
     from_number = request.form.get("From")
     incoming_msg = request.form.get("Body", "").strip().lower()
 
     resp = MessagingResponse()
-
     session = user_sessions[from_number]
 
-    # YES / NO confirmation
+    # -------------------------------
+    # CONFIRMATION HANDLING
+    # -------------------------------
     if incoming_msg in ["yes", "y"] and session.get("awaiting_confirmation"):
-        session["confirmed"] = True
-        session["awaiting_confirmation"] = False
-
         resp.message("✅ Your meeting has been confirmed.")
         user_sessions[from_number] = {}
         return Response(str(resp), mimetype="application/xml")
@@ -25,17 +37,27 @@ def whatsapp_reply():
         user_sessions[from_number] = {}
         return Response(str(resp), mimetype="application/xml")
 
-    # Extract info
+    # -------------------------------
+    # EXTRACT MEETING DETAILS
+    # -------------------------------
     details = extract_meeting_details(incoming_msg)
 
     if details["intent"] != "schedule_meeting":
-        resp.message("❓ I can help you schedule meetings.")
+        resp.message("❓ I can help you schedule a meeting.")
         return Response(str(resp), mimetype="application/xml")
 
-    # Save extracted fields
-    session.update({k: v for k, v in details.items() if v})
+    # Save extracted data
+    for key in ["person_name", "date", "time"]:
+        if details.get(key):
+            session[key] = details[key]
 
-    # Ask missing info
+    # -------------------------------
+    # ASK FOR MISSING INFO
+    # -------------------------------
+    if not session.get("person_name"):
+        resp.message("👤 With whom is the meeting?")
+        return Response(str(resp), mimetype="application/xml")
+
     if not session.get("date"):
         resp.message("📅 On which date should I schedule the meeting?")
         return Response(str(resp), mimetype="application/xml")
@@ -44,11 +66,9 @@ def whatsapp_reply():
         resp.message("⏰ At what time should I schedule the meeting?")
         return Response(str(resp), mimetype="application/xml")
 
-    if not session.get("person_name"):
-        resp.message("👤 With whom is the meeting?")
-        return Response(str(resp), mimetype="application/xml")
-
-    # All details present → confirmation
+    # -------------------------------
+    # CONFIRMATION STEP
+    # -------------------------------
     session["awaiting_confirmation"] = True
 
     resp.message(
@@ -60,3 +80,11 @@ def whatsapp_reply():
     )
 
     return Response(str(resp), mimetype="application/xml")
+
+
+# --------------------------------
+# RUN APP (RENDER NEEDS THIS)
+# --------------------------------
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
