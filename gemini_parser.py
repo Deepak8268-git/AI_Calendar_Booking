@@ -1,12 +1,13 @@
 import requests
 import json
 
-API_KEY = "AIzaSyCfMOLzU9FAa0oH0p0UTAFPhdIUeiBrPZ4"  # your real key
+# API_KEY = "AIzaSyCfMOLzU9FAa0oH0p0UTAFPhdIUeiBrPZ4"  # your real key
+API_KEY = os.getenv("GEMINI_API_KEY")
 
 def extract_meeting_details(message):
     url = (
         "https://generativelanguage.googleapis.com/v1beta/"
-        f"models/gemini-flash-latest:generateContent?key={API_KEY}"
+        f"models/models/gemini-1.5-flash:generateContent?key={API_KEY}"
     )
 
     prompt = f"""
