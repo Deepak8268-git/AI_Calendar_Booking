@@ -4,39 +4,45 @@ import time
 import re
 import requests
 
-# 🔐 Load API key from environment (MANDATORY for production)
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-
 if not GEMINI_API_KEY:
-    raise RuntimeError("❌ GEMINI_API_KEY not set in environment variables")
+    raise RuntimeError("GEMINI_API_KEY not set")
 
 GEMINI_URL = (
     "https://generativelanguage.googleapis.com/"
     "v1beta/models/gemini-flash-latest:generateContent"
 )
 
-HEADERS = {
-    "Content-Type": "application/json"
-}
+HEADERS = {"Content-Type": "application/json"}
 
 
 def extract_meeting_details(message: str) -> dict:
-    """
-    Uses Gemini to extract meeting intent and details from WhatsApp text.
-    Returns a dictionary with keys:
-    intent, person_name, date, time
-    """
-
     prompt = f"""
-Extract meeting information from the WhatsApp message below.
+You are an information extraction engine.
 
-Return ONLY valid JSON with these keys:
-- intent: "schedule_meeting" or "none"
-- person_name
-- date (YYYY-MM-DD)
-- time (HH:MM in 24-hour format)
+Your task:
+Extract meeting details from the message.
+DO NOT ask questions.
+DO NOT add explanations.
+ONLY return valid JSON.
 
-If a value is missing, use null.
+Rules:
+- intent: "schedule_meeting" ONLY if message indicates meeting intent
+- date/time may be partial or missing
+- If user replies like "tomorrow", "today", treat it as date info
+- confidence:
+  - "complete" if person_name + date + time present
+  - "partial" if some fields missing
+  - "none" if no meeting intent
+
+JSON format:
+{{
+  "intent": "schedule_meeting | none",
+  "person_name": string | null,
+  "date": "YYYY-MM-DD" | null,
+  "time": "HH:MM" | null,
+  "confidence": "complete | partial | none"
+}}
 
 Message:
 "{message}"
@@ -44,50 +50,30 @@ Message:
 
     payload = {
         "contents": [
-            {
-                "parts": [{"text": prompt}]
-            }
+            {"parts": [{"text": prompt}]}
         ]
     }
 
-    max_retries = 5
-    base_delay = 2  # seconds
-
-    for attempt in range(max_retries):
+    for attempt in range(5):
         response = requests.post(
             f"{GEMINI_URL}?key={GEMINI_API_KEY}",
             headers=HEADERS,
             json=payload,
-            timeout=30
+            timeout=20
         )
 
-        # 🔁 Retry on quota/rate limit
         if response.status_code == 429:
-            wait_time = base_delay * (2 ** attempt)
-            print(f"⚠️ Gemini rate-limited. Retrying in {wait_time}s...")
-            time.sleep(wait_time)
+            time.sleep(2 ** attempt)
             continue
 
         response.raise_for_status()
 
-        data = response.json()
+        text = response.json()["candidates"][0]["content"]["parts"][0]["text"]
 
-        # 🧠 Safely extract model output
-        try:
-            raw_text = data["candidates"][0]["content"]["parts"][0]["text"]
-        except (KeyError, IndexError):
-            raise ValueError("❌ Invalid response format from Gemini")
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        if not match:
+            raise ValueError("Invalid Gemini response")
 
-        # 🧹 Remove markdown/code blocks if present
-        match = re.search(r"\{.*\}", raw_text, re.DOTALL)
-        json_text = match.group(0) if match else raw_text
+        return json.loads(match.group(0))
 
-        return json.loads(json_text)
-
-    raise RuntimeError("❌ Gemini API failed after multiple retries")
-
-
-# 🧪 Local test
-if __name__ == "__main__":
-    test_msg = "I want to meet Mr Rahul tomorrow at 4 PM"
-    print(extract_meeting_details(test_msg))
+    raise RuntimeError("Gemini failed after retries")
